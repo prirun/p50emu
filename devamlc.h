@@ -1,4 +1,4 @@
-/* 
+/*
   Implements the AMLC subsystem for Primos.  In earlier versions
   (r186), a more hardware-centric implementation was used that closely
   followed the design of Prime's real AMLC board.  For example, every
@@ -52,9 +52,9 @@
   NOTE: varying the AMLC poll rates dynamically is the default, but
         this can lead to unpredictable performance.  If consistent,
         predictable performance is more important than absolute
-        performance, MAXAMLCSPEEDUP can be set to 1.  Then this 
+        performance, MAXAMLCSPEEDUP can be set to 1.  Then this
         implementation will function more or less like a real Prime.
-    
+
 
   AMLC I/O operations:
 
@@ -133,7 +133,7 @@
 AMLC status word (from AMLCT5):
 
      BITS                 DESCRIPTION
-  
+
       1                   END OF RANGE INTERRUPT
       2                   CLOCK RUNNING
       3-6                 LINE # OF LINE WHOSE DATA SET STATUS HAS CHANGED
@@ -202,11 +202,11 @@ int devamlc (int class, int func, int device) {
 #define DSSCOUNTDOWN 25
 
   /* connection types for each line.  This _doesn't_ imply the line is
-     actually connected, ie, an AMLC line may be tied to a specific 
+     actually connected, ie, an AMLC line may be tied to a specific
      serial device (like a USB->serial gizmo), but the USB device may
      not be plugged in.  The connection type would be CT_SERIAL but
      the line's fd would be -1 and the "connected" bit would be 0 */
-     
+
 #define CT_SOCKET 1
 #define CT_SERIAL 2
 #define CT_DEDIP 3
@@ -324,7 +324,7 @@ int devamlc (int class, int func, int device) {
       int tempport;
       struct hostent* host;
       char *p;
-  
+
       /* initially, we don't know about any AMLC boards */
 
       for (dx=0; dx<MAXBOARDS; dx++) {
@@ -346,7 +346,7 @@ int devamlc (int class, int func, int device) {
       /* read the amlc.cfg file.  This file has 3 uses:
 
          1. maps Prime async lines to real serial devices, like host
-            serial ports or USB serial boxes.  
+            serial ports or USB serial boxes.
 
             Format: <line #> /dev/<Unix usb device name>
 
@@ -418,7 +418,7 @@ int devamlc (int class, int func, int device) {
               fprintf(stderr,"Line %d of amlc.cfg ignored: IP address too long\n", lc);
               continue;
             }
-            
+
             /* break out host and port number; no port means this is
                an incoming dedicated line: no connects out.  With a
                port means we need to connect to it. */
@@ -553,7 +553,7 @@ int devamlc (int class, int func, int device) {
     /* XXX: this constant is redefined because of a bug in the
        OSX Prolific USB serial driver at version 1.2.1r2.  They should be
        turning on bit 0100, but are turning on 0x0100. */
-#define TIOCM_CD 0x0100    
+#define TIOCM_CD 0x0100
 
     if (func == 00) {             /* input Data Set Sense (carrier) */
       if (dc[dx].serial) {        /* any serial connections? */
@@ -634,10 +634,10 @@ int devamlc (int class, int func, int device) {
         }
         break;
 
-        
+
       case CT_SERIAL: {
         int fd;
-            
+
         /* setup line characteristics if they have changed (check for
            something other than DTR changing) */
 
@@ -707,7 +707,7 @@ int devamlc (int class, int func, int device) {
              1_0 - cts/rts flow control (2413 becomes 6413)
              1_1 - dsr/dtr flow control (2413 becomes 7413)
 
-             NOTE: bit 11 also appears to be free, but Primos doesn't 
+             NOTE: bit 11 also appears to be free, but Primos doesn't
              let it flow through to the AMLC controller. :(
           */
 
@@ -841,7 +841,7 @@ int devamlc (int class, int func, int device) {
     double ts;
     int neweor, activelines;
     //printf("poll device '%o, speedup=%5.2f, cti=%x, xmit=%x, recv=%x, dss=%x\n", device, pollspeedup, dc[dx].ctinterrupt, dc[dx].xmitenabled, dc[dx].recvenabled, dc[dx].dss);
-    
+
     /* check for 1 new telnet connection every AMLCACCEPTSECS seconds
        (10 times per second) */
 
@@ -991,6 +991,7 @@ int devamlc (int class, int func, int device) {
         if (dc[dx].xmitenabled & BITMASK16(lx+1)) {
           int n, maxn;
           unsigned short qtop, qbot, qseg, qmask, qents;
+          short hasiac;         /* This buffer contains an escaped IAC */
           ea_t qentea, qcbea;
           n = 0;
           qcbea = dc[dx].baseaddr + lx*4;
@@ -1019,12 +1020,35 @@ int devamlc (int class, int func, int device) {
                precludes the use of TTY8BIT mode... */
 
             n = 0;
+            hasiac = 0;
             for (i=0; i < maxn; i++) {
               unsigned short utemp;
               utemp = get16mem(qentea);
-              qentea = (qentea & ~qmask) | ((qentea+1) & qmask);
+/*              qentea = (qentea & ~qmask) | ((qentea+1) & qmask); */
               //printf("Device %o, line %d, entry=%o (%c)\n", device, lx, utemp, utemp & 0x7f);
+#ifdef NOMASKAMLC
+              if (((utemp & 0xff) == 0xff) && (dc[dx].ctype[lx] != CT_SERIAL))
+              {
+                if (n != 0)
+                  break;          /* Clear the buffer before handling IAC */
+                else
+                {
+                  buf[n++] = 0xFF;
+                  buf[n++] = 0xFF;
+                  hasiac = 1;
+                  qentea = (qentea & ~qmask) | ((qentea+1) & qmask);
+                  break;          /* Now ship _just_ the IAC */
+                }
+              }
+              else
+              {
+                buf[n++] = utemp & 0xFF;
+                qentea = (qentea & ~qmask) | ((qentea+1) & qmask);
+              }
+#else
+              /* None of the IAC handling matters if we splatter parity */
               buf[n++] = utemp & 0x7F;
+#endif
             }
           } else {
 
@@ -1036,7 +1060,7 @@ int devamlc (int class, int func, int device) {
 
                 int fd, sockflags;
                 struct sockaddr_in raddr;
-  
+
                 dc[dx].obtimer[lx] = tv.tv_sec + AMLCCONNECT;
                 //printf("em: trying to connect to 0x%08x:%d\n", dc[dx].obhost[lx], dc[dx].obport[lx]); /***/
                 fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -1089,7 +1113,10 @@ int devamlc (int class, int func, int device) {
                  used and Unix buffers get full so writes can't
                  complete */
 
-              qtop = (qtop & ~qmask) | ((qtop+nw) & qmask);
+              if (hasiac)
+                qtop = (qtop & ~qmask) | ((qtop+1) & qmask);
+              else
+                qtop = (qtop & ~qmask) | ((qtop+nw) & qmask);
               put16io(qtop, qcbea);
               if (nw > maxxmit)
                 maxxmit = nw;
@@ -1121,7 +1148,7 @@ int devamlc (int class, int func, int device) {
     }
 
     /* process input, but only as much as will fit into the DMC
-       buffer.  
+       buffer.
 
        Because the size of the AMLC tumble tables is limited, this
        could pose a denial of service issue.  Input is processed in a
